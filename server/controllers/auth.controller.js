@@ -1,8 +1,9 @@
+import bcrypt from 'bcrypt';
 import HttpStatus from 'http-status-codes';
 import jwt from 'jsonwebtoken';
-import bcrypt from 'bcrypt';
-import User from '../models/user.model';
-import logger from '../config/winston';
+import db from '../config/database';
+
+const mysql = require('mysql2');
 
 /**
  * Returns jwt token if valid email and password is provided
@@ -11,38 +12,38 @@ import logger from '../config/winston';
  * @param {object} res
  * @returns {*}
  */
-export function login(req, res) {
+export async function login(req, res) {
     const {email, password} = req.body;
-    User.query({
-        where: {email: email},
-    }).fetch().then(user => {
-        if (user) {
-            if (bcrypt.compareSync(password, user.get('password'))) {
+    const sqlSearch = 'Select * from userTable where email = ?';
+    const searchQuery = mysql.format(sqlSearch, [email]);
 
-                const token = jwt.sign({
-                    id: user.get('id'),
-                    email: user.get('email')
-                }, process.env.TOKEN_SECRET_KEY);
+    const promisePool = db.promise();
+    const [fields] = await promisePool.query(searchQuery);
 
-                res.json({
-                    success: true,
-                    token,
-                    email:  user.get('email')
-                });
-            } else {
-                logger.log('error', 'Authentication failed. Invalid password.');
+    if (!fields.length) {
+        return res.status(HttpStatus.UNAUTHORIZED).json({
+            success: false, message: 'Invalid username or password.'
+        });
+    }
 
-                res.status(HttpStatus.UNAUTHORIZED).json({
-                    success: false,
-                    message: 'Authentication failed. Invalid password.'
-                });
-            }
-        } else {
-            logger.log('error', 'Invalid username or password.');
+    const [user] = fields;
+    const hashedPassword = user.password;
 
-            res.status(HttpStatus.UNAUTHORIZED).json({
-                success: false, message: 'Invalid username or password.'
-            });
-        }
+    if (!await bcrypt.compare(password, hashedPassword)) {
+        return res.status(HttpStatus.UNAUTHORIZED).json({
+            success: false,
+            message: 'Authentication failed. Invalid password.'
+        });
+    }
+
+    const token = jwt.sign({
+        id: user.id,
+        email: user.email
+    }, process.env.TOKEN_SECRET_KEY);
+
+    return res.json({
+        success: true,
+        token,
+        email: user.email
     });
 }
